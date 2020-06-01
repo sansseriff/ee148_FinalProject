@@ -32,6 +32,7 @@ class ListDataset(data.Dataset):
         if self.co_transform is not None:
             inputs, target = self.co_transform(input, target)
         if self.transform is not None:
+            #transform both of the input images
             input[0] = self.transform(input[0])
             input[1] = self.transform(input[1])
         if self.target_transform is not None:

@@ -1,4 +1,3 @@
-from __future__ import print_function
 import argparse
 import torch
 import torch.nn as nn
@@ -16,8 +15,7 @@ import random
 import PIL
 import pickle
 from PIL import Image
-
-
+import flow_transforms
 
 
 import sklearn
@@ -315,6 +313,21 @@ def main():
     print(np.shape(test_data))
 
     '''
+
+    '''
+    # Data loading code
+    input_transform = transforms.Compose([
+        flow_transforms.ArrayToTensor(),
+        transforms.Normalize(mean=[0,0,0], std=[255,255,255]),
+        transforms.Normalize(mean=[0.45,0.432,0.411], std=[1,1,1])
+    ])
+    target_transform = transforms.Compose([
+        flow_transforms.ArrayToTensor(),
+        transforms.Normalize(mean=[0,0],std=[args.div_flow,args.div_flow])
+    ])
+    '''
+
+
     FM_1_testdir = "C://data//FlyingMonkeys_1//test"
     FM_1_traindir = "C://data//FlyingMonkeys_1//train"
     train_data = []
@@ -360,7 +373,7 @@ def main():
         test_dataset, batch_size=args.batch_size,
         num_workers = 1, pin_memory=True, shuffle=False)
 
-    '''
+
     a,b = train_dataset.__getitem__(178)
 
     print(np.shape(a))
@@ -371,7 +384,10 @@ def main():
     print(a[:, :, 1].dtype)
     viewImg(a[:,:,1])
     viewImg(a[:, :, 0])
-    '''
+
+    print(a[100,100,0])
+    print(a[100, 100, 1])
+
 
 
 
