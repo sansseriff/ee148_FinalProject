@@ -7,12 +7,17 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data.sampler import SubsetRandomSampler
+from PhotonNetS import PhotonNetS
+from Vector_Extractor import img2rgb
 
 import matplotlib.pyplot as plt
 import numpy as np
 import random
 import PIL
 import pickle
+from PIL import Image
+
+
 
 
 import sklearn
@@ -23,6 +28,8 @@ import pandas as pd
 from math import log
 import math
 
+from listdataset import ListDataset
+
 
 random.seed(2020)
 torch.manual_seed(2020)
@@ -30,6 +37,17 @@ torch.manual_seed(2020)
 
 import os
 
+
+def viewFlow(flow_array, dimx, dimy):
+    colormap = img2rgb(flow_array, dimx, dimy)
+    im = Image.fromarray(colormap)
+    fig, ax = plt.subplots(1)
+    ax.imshow(im)
+
+def viewImg(img):
+    im = Image.fromarray(img)
+    fig, ax = plt.subplots(1)
+    ax.imshow(im, cmap='gray')
 
 def train(args, model, device, train_loader, optimizer, epoch):
     '''
@@ -224,13 +242,13 @@ def test(model, device, test_loader, evaluate = False):
 def main():
     # Training settings
     # Use the command line to modify the default settings
-    parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
+    parser = argparse.ArgumentParser(description='PyTorch PhotonNet')
     parser.add_argument('--batch-size', type=int, default=64, metavar='N',
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=14, metavar='N',
-                        help='number of epochs to train (default: 14)')
+    parser.add_argument('--epochs', type=int, default=5, metavar='N',
+                        help='number of epochs to train (default: 5)')
     parser.add_argument('--lr', type=float, default=1.0, metavar='LR',
                         help='learning rate (default: 1.0)')
     parser.add_argument('--step', type=int, default=1, metavar='N',
@@ -258,10 +276,15 @@ def main():
 
     device = torch.device("cuda" if use_cuda else "cpu")
 
+    print(device)
     kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
 
     # Evaluate on the official test set
     if args.evaluate:
+
+        '''
+        set this up like the training set!
+        '''
         assert os.path.exists(args.load_model)
 
         # Set the test model
@@ -281,13 +304,85 @@ def main():
 
         return
 
+    # this takes too long
+    '''
+    datasets_path = "C:\data\splits"
+    test_data = np.load(os.path.join(datasets_path, "test_data.npy"))
+    test_gt = np.load(os.path.join(datasets_path, "test_gt.npy"))
+    train_data = np.load(os.path.join(datasets_path, "train_data.npy"))
+    train_gt = np.load(os.path.join(datasets_path, "train_gt.npy"))
+
+    print(np.shape(test_data))
+
+    '''
+    FM_1_testdir = "C://data//FlyingMonkeys_1//test"
+    FM_1_traindir = "C://data//FlyingMonkeys_1//train"
+    train_data = []
+    train_gt = []
+
+    test_data = []
+    test_gt = []
+
+    for filename in os.listdir(FM_1_traindir):
+        if filename.startswith("data"):
+            #this is so hack-y...
+            train_data.append([filename, int(filename.split('_')[1].split('.')[0])])  #split the filename
+            # by the underscore and split the number from the filetype
+        elif filename.startswith("gt"):
+            train_gt.append([filename, int(filename.split('_')[1].split('.')[0])])
+
+    for filename in os.listdir(FM_1_testdir):
+        if filename.startswith("data"):
+            #this is so hack-y...
+            test_data.append([filename, int(filename.split('_')[1].split('.')[0])])  #split the filename
+            # by the underscore and split the number from the filetype
+        elif filename.startswith("gt"):
+            test_gt.append([filename, int(filename.split('_')[1].split('.')[0])])
+
+    train_data.sort(key = lambda x: x[1])
+    train_gt.sort(key=lambda x: x[1])
+    test_data.sort(key=lambda x: x[1])
+    test_gt.sort(key=lambda x: x[1])
+
+    train_list = [[data[0],gt[0]] for data, gt in zip(train_data,train_gt)]
+    test_list = [[data[0], gt[0]] for data, gt in zip(test_data, test_gt)]
+
+    print(train_list [787])
+    print(test_list[787])
+    train_dataset = ListDataset(FM_1_traindir , train_list)
+    test_dataset = ListDataset(FM_1_testdir, test_list)
+
+
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=args.batch_size,
+        num_workers = 1, pin_memory=True, shuffle=True)
+    val_loader = torch.utils.data.DataLoader(
+        test_dataset, batch_size=args.batch_size,
+        num_workers = 1, pin_memory=True, shuffle=False)
+
+    '''
+    a,b = train_dataset.__getitem__(178)
+
+    print(np.shape(a))
+    viewFlow(b,256,192)
+
+    np.shape(a)
+    print(a[: ,: ,0].dtype)
+    print(a[:, :, 1].dtype)
+    viewImg(a[:,:,1])
+    viewImg(a[:, :, 0])
+    '''
+
+
+
+    '''
     # Pytorch has default MNIST dataloader which loads data at each iteration
     train_dataset = datasets.MNIST('../data', train=True, download=True,
                 transform=transforms.Compose([       # Data preprocessing
                     transforms.ToTensor(),           # Add data augmentation here
                     transforms.Normalize((0.1307,), (0.3081,))
                 ]))
-
+    
     train_dataset_augmented = datasets.MNIST('../data', train=True, download=True,
                                    transform=transforms.Compose([  # Data preprocessing
                                        #transforms.RandomCrop(28, padding=(1, 1, 1, 1)),
@@ -300,6 +395,7 @@ def main():
                                        transforms.Normalize((0.1307,), (0.3081,))
                                    ]))
 
+    
     print(type(train_dataset))
     print(len(train_dataset), type(train_dataset[0][0]), type(train_dataset[0][1]), type(train_dataset[0]))
 
@@ -330,9 +426,9 @@ def main():
     #print(idx[0][1:100])
 
     for i, number_indx in enumerate(idx):
-        random.shuffle(number_indx)
+        random.shuffle(number_indx)     #shuffle the index list
         l = len(number_indx)
-        idx_lim = int(l*0.15)
+        idx_lim = int(l*0.15)           # 15% of train set is used for validation
         val_idx[i] = number_indx[0:idx_lim]
         train_idx[i] = number_indx[idx_lim:]
 
@@ -351,13 +447,6 @@ def main():
 
 
 
-
-    # You can assign indices for training/validation or use a random subset for
-    # training by using SubsetRandomSampler. Right now the train and validation
-    # sets are built from the same indices - this is bad! Change it so that
-    # the training and validation sets are disjoint and have the correct relative sizes.
-
-
     train_loader = torch.utils.data.DataLoader(
         train_dataset_augmented, batch_size=args.batch_size,
         sampler=SubsetRandomSampler(subset_indices_train[:train_length])
@@ -366,9 +455,12 @@ def main():
         train_dataset, batch_size=args.test_batch_size,
         sampler=SubsetRandomSampler(subset_indices_valid)
     )
+    
+    '''
+    # Load model
+    model = PhotonNetS(batchNorm=False).to(device)
 
-    # Load your model [fcNet, ConvNet, Net]
-    model = Net().to(device)
+
 
     # Try different optimzers here [Adam, SGD, RMSprop]
     optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
@@ -377,14 +469,16 @@ def main():
     # Set your learning rate scheduler
     scheduler = StepLR(optimizer, step_size=args.step, gamma=args.gamma)
 
+
+    '''
     # Training loop
     train_losses = []
     test_losses = []
     x = []
     fig, ax = plt.subplots(1)
+    '''
 
-
-    if True:
+    if False:
         for epoch in range(1, args.epochs + 1):
             #train and test each epoch
             train_loss = train(args, model, device, train_loader, optimizer, epoch)

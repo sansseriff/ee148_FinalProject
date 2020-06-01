@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn.init import kaiming_normal_, constant_
-from .util import conv, predict_flow, deconv, crop_like
+from util import conv, predict_flow, deconv, crop_like
 
 __all__ = [
     'flownets', 'flownets_bn'
@@ -12,7 +12,7 @@ class PhotonNetS(nn.Module):
     expansion = 1
 
     def __init__(self,batchNorm=True):
-        super(FlowNetS,self).__init__()
+        super(PhotonNetS,self).__init__()
 
         ####halved
         self.batchNorm = batchNorm
@@ -29,16 +29,16 @@ class PhotonNetS(nn.Module):
 
 
         #######
-        self.deconv5 = deconv(1024,512)
-        self.deconv4 = deconv(1026,256)
-        self.deconv3 = deconv(770,128)
-        self.deconv2 = deconv(386,64)
+        self.deconv5 = deconv(512,256)  # input: conv6(512)
+        self.deconv4 = deconv(514,128)   # input: deconv5(256) + conv5_1(256) + flow6_up(2)
+        self.deconv3 = deconv(386,64)  # input: deconv4(128) + conv4_1(256) + flow5_up(2)
+        self.deconv2 = deconv(194,32) # input: deconv3(64) + conv3_1(128) + flow4_up(2)
 
-        self.predict_flow6 = predict_flow(1024)
-        self.predict_flow5 = predict_flow(1026)
-        self.predict_flow4 = predict_flow(770)
-        self.predict_flow3 = predict_flow(386)
-        self.predict_flow2 = predict_flow(194)
+        self.predict_flow6 = predict_flow(512)
+        self.predict_flow5 = predict_flow(514)
+        self.predict_flow4 = predict_flow(386)
+        self.predict_flow3 = predict_flow(194)
+        self.predict_flow2 = predict_flow(98)  # input: deconv2(32) + conv2(64) + flow3_up(2)
 
         self.upsampled_flow6_to_5 = nn.ConvTranspose2d(2, 2, 4, 2, 1, bias=False)
         self.upsampled_flow5_to_4 = nn.ConvTranspose2d(2, 2, 4, 2, 1, bias=False)
@@ -62,7 +62,7 @@ class PhotonNetS(nn.Module):
         out_conv6 = self.conv6_1(self.conv6(out_conv5))
 
         flow6       = self.predict_flow6(out_conv6)
-        flow6_up    = crop_like(self.upsampled_flow6_to_5(flow6), out_conv5)
+        flow6_up    = crop_like(self.upsampled_flow6_to_5(flow6), out_conv5)  # should be cropped the same by default?
         out_deconv5 = crop_like(self.deconv5(out_conv6), out_conv5)
 
         concat5 = torch.cat((out_conv5,out_deconv5,flow6_up),1)
@@ -103,7 +103,7 @@ def photonnets(data=None):
     Args:
         data : pretrained weights of the network. will create a new one if not set
     """
-    model = FlowNetS(batchNorm=False)
+    model = PhotonNetS(batchNorm=False)
     if data is not None:
         model.load_state_dict(data['state_dict'])
     return model
@@ -116,7 +116,7 @@ def photonnets_bn(data=None):
     Args:
         data : pretrained weights of the network. will create a new one if not set
     """
-    model = FlowNetS(batchNorm=True)
+    model = PhotonNetS(batchNorm=True)
     if data is not None:
         model.load_state_dict(data['state_dict'])
     return model

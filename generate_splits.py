@@ -23,9 +23,6 @@ for i, name in enumerate(file_names):
 examples.sort()
 
 
-
-
-
 number_train = int(0.75*len(examples))
 number_test = int(len(examples) - number_train)
 train_data = np.zeros((number_train,192,256,2))
@@ -49,7 +46,6 @@ for i, example in enumerate(examples):
         if i < number_train:
                 #ex_c = ex[0][4:-4]
 
-
                 #ex_c = np.pad(ex[0][4:-4], ((0,0), (8,8), (0,0)), 'minimum')
                 #print(np.shape(ex_c))
 
@@ -72,8 +68,23 @@ np.shape(test_data)
 np.shape(test_gt)
 
 
-np.save(os.path.join(splits_path, "train_data"), train_data)
-np.save(os.path.join(splits_path, "train_gt"), train_gt)
+#np.save(os.path.join(splits_path, "train_data"), train_data)
+#np.save(os.path.join(splits_path, "train_gt"), train_gt)
 
-np.save(os.path.join(splits_path, "test_data"), test_data)
-np.save(os.path.join(splits_path, "test_gt"), test_gt)
+#np.save(os.path.join(splits_path, "test_data"), test_data)
+#np.save(os.path.join(splits_path, "test_gt"), test_gt)
+
+test_output_path = "C://data//FlyingMonkeys_1//test"
+train_output_path = "C://data//FlyingMonkeys_1//train"
+
+for i, example in enumerate(train_data):
+        traindata_filename = "data_" + str(i)
+        traingt_filename = "gt_" + str(i)
+        np.save(os.path.join(train_output_path, traindata_filename), example)
+        np.save(os.path.join(train_output_path, traingt_filename), train_gt[i])
+
+for i, example in enumerate(test_data):
+        traindata_filename = "data_" + str(i)
+        traingt_filename = "gt_" + str(i)
+        np.save(os.path.join(test_output_path, traindata_filename), example)
+        np.save(os.path.join(test_output_path, traingt_filename), test_gt[i])
