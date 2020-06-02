@@ -308,30 +308,6 @@ def main():
     print(device)
     kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
 
-    # Evaluate on the official test set
-    if args.evaluate:
-
-        '''
-        set this up like the training set!
-        '''
-        assert os.path.exists(args.load_model)
-
-        # Set the test model
-        model = Net().to(device)
-        model.load_state_dict(torch.load(args.load_model))
-
-        test_dataset = datasets.MNIST('../data', train=False,
-                    transform=transforms.Compose([
-                        transforms.ToTensor(),
-                        transforms.Normalize((0.1307,), (0.3081,))
-                    ]))
-
-        #test_loader = torch.utils.data.DataLoader(
-        #    test_dataset, batch_size=args.test_batch_size, shuffle=True, **kwargs)
-
-        test(model, device, test_loader, evaluate = True)
-
-        return
 
     # this takes too long
     '''
@@ -429,117 +405,55 @@ def main():
     #print(a[100, 100, 1])
 
 
-
-
-    '''
-    # Pytorch has default MNIST dataloader which loads data at each iteration
-    train_dataset = datasets.MNIST('../data', train=True, download=True,
-                transform=transforms.Compose([       # Data preprocessing
-                    transforms.ToTensor(),           # Add data augmentation here
-                    transforms.Normalize((0.1307,), (0.3081,))
-                ]))
-    
-    train_dataset_augmented = datasets.MNIST('../data', train=True, download=True,
-                                   transform=transforms.Compose([  # Data preprocessing
-                                       #transforms.RandomCrop(28, padding=(1, 1, 1, 1)),
-                                       #transforms.RandomRotation(4, resample=PIL.Image.BILINEAR),
-                                       #transforms.RandomResizedCrop(28, scale=(0.85, 1.0), ratio=(1, 1),
-                                       #                             interpolation=2),
-                                       transforms.RandomAffine(8, translate=(.065, .065), scale=(0.80, 1.1),
-                                                               resample=PIL.Image.BILINEAR),
-                                       transforms.ToTensor(),  # Add data augmentation here
-                                       transforms.Normalize((0.1307,), (0.3081,))
-                                   ]))
-
-    
-    print(type(train_dataset))
-    print(len(train_dataset), type(train_dataset[0][0]), type(train_dataset[0][1]), type(train_dataset[0]))
-
-    print("the int is: ", train_dataset[2][1])
-    print(np.shape(train_dataset[0][0][0].numpy()))
-
-    idx = [[] for i in range(10)]
-    #each row of indexes is a list of indexes in the train_dataset
-    #e.g. row 5 containes a list of indexes for the places in train_dataset with images of 5
-    print(idx[4])
-    for i, img in enumerate(train_dataset):
-
-        #if False:
-        if i < 5:
-            fig = plt.figure()
-            plt.imshow(img[0][0].numpy(), cmap='gray')
-
-            fig = plt.figure()
-            plt.imshow(train_dataset_augmented[i][0][0].numpy(), cmap='gray')
-
-        for number in range(10):
-            if img[1] == number:
-                idx[number].append(i)
-
-
-    val_idx = [[] for i in range(10)]
-    train_idx = [[] for i in range(10)]
-    #print(idx[0][1:100])
-
-    for i, number_indx in enumerate(idx):
-        random.shuffle(number_indx)     #shuffle the index list
-        l = len(number_indx)
-        idx_lim = int(l*0.15)           # 15% of train set is used for validation
-        val_idx[i] = number_indx[0:idx_lim]
-        train_idx[i] = number_indx[idx_lim:]
-
-
-    subset_indices_train = [j for sub in train_idx for j in sub]
-    subset_indices_valid = [j for sub in val_idx for j in sub]
-
-
-    # for adjusting size of train set
-
-    train_length = int(len(subset_indices_train))
-    #train_length = int(len(subset_indices_train)/2)
-    #train_length = int(len(subset_indices_train) / 4)
-    #train_length = int(len(subset_indices_train) / 8)
-    #train_length = int(len(subset_indices_train) / 16)
-
-
-
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset_augmented, batch_size=args.batch_size,
-        sampler=SubsetRandomSampler(subset_indices_train[:train_length])
-    )
-    val_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.test_batch_size,
-        sampler=SubsetRandomSampler(subset_indices_valid)
-    )
-    
-    '''
     # Load model
     model = PhotonNetS(batchNorm=True).to(device)
 
+    '''######################################################'''
+    # Evaluate on the test set using saved model
+    evaluate = True
+    if evaluate:
+        assert os.path.exists(os.path.join(save_path, "datset1_15epochs.pt"))
+
+        # Set the test model
+        model = PhotonNetS(batchNorm=True).to(device)
+
+        model.load_state_dict(torch.load(os.path.join(save_path, "datset1_15epochs.pt")))
 
 
-    # Try different optimzers here [Adam, SGD, RMSprop]
-    #optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
-    optimizer = optim.Adam(model.parameters(), 0.00030,
-                                 betas=(.9, .999))
+
+        # test_loader = torch.utils.data.DataLoader(
+        #    test_dataset, batch_size=args.test_batch_size, shuffle=True, **kwargs)
+
+        with torch.no_grad():
+            epoch = 1
+            EPE = validate(val_loader, model, epoch, output_writers)
+            print("EPE is:", EPE)
+        return
 
 
-    # betas=(args.momentum, args.beta))
 
-    # Set learning rate scheduler
-    scheduler = StepLR(optimizer, step_size=args.step, gamma=args.gamma)
-    #scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestones, gamma=0.5)
+    train = False
+    if train:
 
-    '''
-    # Training loop
-    train_losses = []
-    test_losses = []
-    x = []
-    fig, ax = plt.subplots(1)
-    '''
+        # Try different optimzers here [Adam, SGD, RMSprop]
+        #optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
+        optimizer = optim.Adam(model.parameters(), 0.00030,
+                                     betas=(.9, .999))
 
-    if True:
-        for epoch in range(20):
+        # betas=(args.momentum, args.beta))
+
+        # Set learning rate scheduler
+        scheduler = StepLR(optimizer, step_size=args.step, gamma=args.gamma)
+        #scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestones, gamma=0.5)
+
+        '''
+        # Training loop
+        train_losses = []
+        test_losses = []
+        x = []
+        fig, ax = plt.subplots(1)
+        '''
+        for epoch in range(15):
 
 
             # train for one epoch
@@ -567,20 +481,17 @@ def main():
                 'div_flow': args.div_flow
             }, is_best, save_path)
 
-        if args.save_model:
+        #if args.save_model:
             ######################
             # needs to be updated
             ######################
-            print(train_losses)
-            with open("train_losses_one.txt", "wb") as fp:  # Pickling
-                pickle.dump(train_losses, fp)
-            print(test_losses)
-            with open("test_losses_one.txt", "wb") as fp:  # Pickling
-                pickle.dump(test_losses, fp)
-
-
-
-            torch.save(model.state_dict(), "mnist_model_onef.pt")
+            #print(train_losses)
+            #with open("train_losses_one.txt", "wb") as fp:  # Pickling
+            #    pickle.dump(train_losses, fp)
+            #print(test_losses)
+            #with open("test_losses_one.txt", "wb") as fp:  # Pickling
+            #    pickle.dump(test_losses, fp)
+        torch.save(model.state_dict(), os.path.join(save_path, "datset1_15epochs.pt"))
 
 
 if __name__ == '__main__':
