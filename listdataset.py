@@ -29,12 +29,17 @@ class ListDataset(data.Dataset):
 
         #input and target change from lists to numpy arrays. That's weird...
         input, target = self.loader(self.root, input, target)
+        # at this point it's all still numpy arrays?
+        #print("target size:", np.shape(target))
+        #print("input size:", np.shape(input))
         if self.co_transform is not None:
             inputs, target = self.co_transform(input, target)
+
         if self.transform is not None:
             #transform both of the input images
-            input[0] = self.transform(input[0])
-            input[1] = self.transform(input[1])
+            #input[0] = self.transform(input[0])
+            input= self.transform(input)
+            #print("input size:", input.size())
         if self.target_transform is not None:
             target = self.target_transform(target)
         return input, target

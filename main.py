@@ -8,6 +8,8 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data.sampler import SubsetRandomSampler
 from PhotonNetS import PhotonNetS
 from Vector_Extractor import img2rgb
+import time
+import datetime
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,7 +18,8 @@ import PIL
 import pickle
 from PIL import Image
 import flow_transforms
-
+from multiscaleloss import multiscaleEPE, realEPE
+from tensorboardX import SummaryWriter
 
 import sklearn
 from sklearn.metrics import confusion_matrix
@@ -27,246 +30,274 @@ from math import log
 import math
 
 from listdataset import ListDataset
-
+from util2 import flow2rgb, AverageMeter, save_checkpoint
+import os
 
 random.seed(2020)
 torch.manual_seed(2020)
 
 
-import os
+
+# Training settings
+# Use the command line to modify the default settings
+parser = argparse.ArgumentParser(description='PyTorch PhotonNet')
+parser.add_argument('-b', '--batch-size', default=50, type=int,
+                    metavar='N', help='mini-batch size')
+#parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
+#                    help='input batch size for testing (default: 1000)')
+parser.add_argument('--epochs', type=int, default=5, metavar='N',
+                    help='number of epochs to train (default: 5)')
+parser.add_argument('--lr', type=float, default=.1, metavar='LR',
+                    help='learning rate (default: 1.0)')
+parser.add_argument('--step', type=int, default=1, metavar='N',
+                    help='number of epochs between learning rate reductions (default: 1)')
+parser.add_argument('--gamma', type=float, default=0.7, metavar='M',
+                    help='Learning rate step gamma (default: 0.7)')
+parser.add_argument('--no-cuda', action='store_true', default=False,
+                    help='disables CUDA training')
+parser.add_argument('--seed', type=int, default=1, metavar='S',
+                    help='random seed (default: 1)')
+parser.add_argument('--log-interval', type=int, default=10, metavar='N',
+                    help='how many batches to wait before logging training status')
+
+parser.add_argument('--evaluate', action='store_true', default=False,
+                    help='evaluate your model on the official test set')
+parser.add_argument('--load-model', type=str,
+                    help='model file path')
+
+parser.add_argument('--save-model', action='store_true', default=False,
+                    help='For Saving the current Model')
+parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
+                    help='momentum for sgd, alpha parameter for adam')
+parser.add_argument('--multiscale-weights', '-w', default=[0.02, 0.04, 0.04, 0.08, 0.32], type=float, nargs=5,
+                    help='training weight for each scale, from highest resolution (flow2) to lowest (flow6)',
+                    metavar=('W2', 'W3', 'W4', 'W5', 'W6'))
+parser.add_argument('--milestones', default=[100, 150, 200], metavar='N', nargs='*',
+                    help='epochs at which learning rate is divided by 2')
+parser.add_argument('--beta', default=0.999, type=float, metavar='M',
+                    help='beta parameter for adam')
+#################################
+parser.add_argument('--div-flow', default=.5,
+                    help='value by which flow will be divided. Original value is 20 but 1 with batchNorm gives good results')
+#################################
+parser.add_argument('--epoch-size', default=1000, type=int, metavar='N',
+                    help='manual epoch size (will match dataset size if set to 0)')
+parser.add_argument('--sparse', action='store_true',
+                    help='look for NaNs in target flow when computing EPE, avoid if flow is garantied to be dense,'
+                    'automatically seleted when choosing a KITTIdataset')
+parser.add_argument('--print-freq', '-p', default=10, type=int,
+                    metavar='N', help='print frequency')
 
 
-def viewFlow(flow_array, dimx, dimy):
+
+
+
+best_EPE = -1
+n_iter = 0
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def viewFlow(flow_array, dimx, dimy, to_8bit = False, filename = None, show = True):
+    root = "..//data//output//testing_images"
+    if to_8bit:
+        flow_array = (flow_array * 255).astype(np.uint8)
     colormap = img2rgb(flow_array, dimx, dimy)
     im = Image.fromarray(colormap)
-    fig, ax = plt.subplots(1)
-    ax.imshow(im)
-
-def viewImg(img):
-    im = Image.fromarray(img)
-    fig, ax = plt.subplots(1)
-    ax.imshow(im, cmap='gray')
-
-def train(args, model, device, train_loader, optimizer, epoch):
-    '''
-    This is your training function. When you call this function, the model is
-    trained for 1 epoch.
-    '''
-    model.train()   # Set the model to training mode
-    total_loss = 0
-    for batch_idx, (data, target) in enumerate(train_loader):
-        data, target = data.to(device), target.to(device)
-        optimizer.zero_grad()               # Clear the gradient
-        output, hidden_layer = model(data)                # Make predictions
-        loss = F.nll_loss(output, target)   # Compute loss
-        loss.backward()                     # Gradient computation
-        optimizer.step()                    # Perform a single optimization step
-        if batch_idx % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.sampler),
-                100. * batch_idx / len(train_loader), loss.item()))
-
-        total_loss = total_loss + loss.item()
-    #train loss for each epoch is an average of the loss over all mini-batches
-    train_loss = total_loss/batch_idx
-
-    return train_loss
-
-
-def test(model, device, test_loader, evaluate = False):
-    model.eval()    # Set the model to inference mode
-    test_loss = 0
-    correct = 0
-    test_num = 0
-
-    images = []
-    allimages = []
-    master_preds = []
-    master_truths = []
-    master_hidden_layers = []
-    with torch.no_grad():   # For the inference step, gradient is not computed
-        for data, target in test_loader:
-            data, target = data.to(device), target.to(device)
-            output, hidden_layer = model(data)
-
-            #feature_extractor = torch.nn.Sequential(*list(model.children())[:-1])
-
-            test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
-            pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
-
-            print(len(hidden_layer))
-            print(len(hidden_layer[0]))
-            #print(hidden_layer[0])
-
-
-            correct += pred.eq(target.view_as(pred)).sum().item()
-            test_num += len(data)
-
-
-            if evaluate:
-                for i in range(len(pred)):
-                    master_preds.append(pred[i][0].item())
-                    master_truths.append(target[i].item())
-                    layer = hidden_layer[i].cpu()
-                    master_hidden_layers.append(layer.numpy())
-                    image = data[i][0].cpu()
-                    allimages.append(image.numpy())
-                    if pred[i][0] == target[i]:
-                        continue
-                    else:
-                        #print("not equal")
-                        #print("pred is ", pred[i][0].item(), "and target is ", target[i].item())
-                        image = data[i][0].cpu()
-                        images.append([image.numpy(),pred[i][0].item(),target[i].item()])
-
-        if evaluate:
-
-            #print(len(master_hidden_layers))
-            #print(master_hidden_layers[0])
-
-            distances = np.zeros(len(master_hidden_layers))
-
-            #x0 = master_hidden_layers[0]
-
-            for i in range(len(distances)):
-                length = 0
-                for dim in range(len(master_hidden_layers[0])):
-                    length = length + (master_hidden_layers[i][dim] - master_hidden_layers[15][dim])**2
-                length = math.sqrt(length)
-                distances[i] = length
-
-            sorted_distance_index = np.argsort(distances)
-
-            figa = plt.figure()
-
-
-            print("test")
-            for i in range(9):
-                sub = figa.add_subplot(9, 1, i + 1)
-                sub.imshow(allimages[sorted_distance_index[i]], interpolation='nearest', cmap='gray')
-
-            X = master_hidden_layers
-            y = np.array(master_truths)
-            tsne = TSNE(n_components=2, random_state=0)
-            X_2d = np.array(tsne.fit_transform(X))
-
-            target_ids = range(10)
-
-            cdict = {0: 'orange', 1: 'red', 2: 'blue', 3: 'green', 4: 'salmon', 5:'c', 6: 'm', 7: 'y', 8: 'k', 9: 'lime'}
-
-            fig, ax = plt.subplots()
-            for g in np.unique(y):
-                ix = np.where(y == g)
-                ax.scatter(X_2d[ix, 0], X_2d[ix, 1], c=cdict[g], label=g, s=5)
-            ax.legend()
-            plt.show()
-
-
-            #i = 1
-            #plt.figure(figsize=(6, 5))
-            #plt.scatter(X_2d[10*i:10*i+10,0],X_2d[:10,1])
+    if show:
+        fig, ax = plt.subplots(1)
+        ax.imshow(im)
+    if filename is not None:
+        im.save(os.path.join(root,filename), quality=100)
 
 
 
-            CM = confusion_matrix(master_truths,master_preds)
-            CMex = CM
-            #for i in range(len(CM)):
-            #    for j in range(len(CM)):
-            #        if CM[i][j] > 0:
-            #            CMex[i][j] = log(CM[i][j])
-            #        else:
-            #            CMex[i][j] = CM[i][j]
+def viewImg(img, to_8bit = False, Lum = False, filename = None, show = True):
+    root = "..//data//output//testing_images"
+    if to_8bit:
+        im = Image.fromarray((img * 255).astype(np.uint8))
+    else:
+        im = Image.fromarray(img)
 
-            print(CM)
-            print(CMex)
-
-            df_cm = pd.DataFrame(CM, range(10), range(10))
-            #plt.figure(figsize=(10,7))
-            fig0,ax0 = plt.subplots(1)
-            sn.set(font_scale=1)  # for label size
-            sn.heatmap(df_cm, annot=True, annot_kws={"size": 11})  # font size
-            #ax0.set_ylim(len(CMex) - 0.5, 0.5)
-            plt.xlabel("predicted")
-            plt.ylabel("ground truth")
-            plt.show()
+    if show:
+        fig, ax = plt.subplots(1)
+        if Lum:
+            ax.imshow(im, cmap='gray')
+        else:
+            ax.imshow(im)
+    if filename is not None:
+        im.save(os.path.join(root,filename), quality=100)
 
 
 
+def train(train_loader, model, optimizer, epoch, train_writer):
+    global n_iter, args
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+    losses = AverageMeter()
+    flow2_EPEs = AverageMeter()
 
-            fig = plt.figure()
+    epoch_size = len(train_loader) if args.epoch_size == 0 else min(len(train_loader), args.epoch_size)
 
-            for i in range(9):
-                sub = fig.add_subplot(3, 3, i + 1)
-                sub.imshow(images[i + 10][0], interpolation='nearest', cmap='gray')
+    # switch to train mode
+    model.train()
 
-                title = "Predicted: " + str(images[i+ 10][1]) + " True: " + str(images[i+ 10][2])
-                sub.set_title(title)
+    end = time.time()
 
-            kernels = model.conv1.weight.cpu().detach().clone()
-            kernels = kernels - kernels.min()
-            kernels = kernels / kernels.max()
-
-            kernels = kernels.numpy()
-            print(np.shape(kernels))
-
-            fig2 = plt.figure()
-            for i in range(8):
-
-                sub = fig2.add_subplot(2, 4, i + 1)
-                sub.imshow(kernels[i][0], interpolation='nearest', cmap='gray')
-
-                title = "Kernel #" + str(i + 1)
-                sub.set_title(title)
+    for i, (input, target) in enumerate(train_loader):
+        # measure data loading time
+        data_time.update(time.time() - end)
+        target = target.to(device)
+        #?????
+        #input = torch.cat(input,1).to(device)
+        input = input.to(device)
 
 
-        #fig, axs = plt.subplots(3, 3, constrained_layout=True)
-        #for i in range(9):
-        #    fig[i].imshow(images[i][0], interpolation='nearest', cmap='gray')
-        #    axs[i].set_title("all titles")
+        #print("input is: ", input)
+        #print("input[0] is: ", input[0])
+        #print("input[0] size: ",input[0].size())
+
+        if False:
+            print("time input:")
+            print(input[0,1,75:85,150:160])
+            print("boolean input")
+            print(input[0, 0, 75:85, 150:160])
+
+        # compute output
+        output = model(input)
+        if args.sparse:
+            # Since Target pooling is not very precise when sparse,
+            # take the highest resolution prediction and upsample it instead of downsampling target
+            h, w = target.size()[-2:]
+            output = [F.interpolate(output[0], (h,w)), *output[1:]]
+
+        loss = multiscaleEPE(output, target, weights=args.multiscale_weights, sparse=args.sparse)
+        flow2_EPE = args.div_flow * realEPE(output[0], target, sparse=args.sparse)
+
+
+        if False:
+            print("type: ", type(output))
+            print("length: ",len(output))
+            print("it is: ",output[0])
+            print("nextddddddddddddddddddddddd")
+            print("it is: ", output[1])
+            print("nextddddddddddddddddddddddd")
+            print("it is: ", output[2])
+            print("EPEEEEEEEEEEEEEEEEEEEEEEE")
+            print(flow2_EPE)
 
 
 
+        # record loss and EPE
+        losses.update(loss.item(), target.size(0))
+        train_writer.add_scalar('train_loss', loss.item(), n_iter)
+        flow2_EPEs.update(flow2_EPE.item(), target.size(0))
+
+        # compute gradient and do optimization step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if i % args.print_freq == 0:
+            print('Epoch: [{0}][{1}/{2}]\t Time {3}\t Data {4}\t Loss {5}\t EPE {6}'
+                  .format(epoch, i, epoch_size, batch_time,
+                          data_time, losses, flow2_EPEs))
+        n_iter += 1
+        if i >= epoch_size:
+            break
+
+        #if i > 5:
+        #    break
+    return losses.avg, flow2_EPEs.avg
 
 
-    test_loss /= test_num
+def validate(val_loader, model, epoch, output_writers):
+    global args
 
-    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.4f}%)\n'.format(
-        test_loss, correct, test_num,
-        100. * correct / test_num))
+    batch_time = AverageMeter()
+    flow2_EPEs = AverageMeter()
 
-    return test_loss
+    # switch to evaluate mode
+    model.eval()
+
+    end = time.time()
+    for i, (input, target) in enumerate(val_loader):
+        target = target.to(device)
+        #################
+        #?????????????????
+        #input = torch.cat(input,1).to(device)
+        input = input.to(device)
+
+        # compute output
+        output = model(input)
+        flow2_EPE = args.div_flow*realEPE(output, target, sparse=args.sparse)
+        # record EPE
+        flow2_EPEs.update(flow2_EPE.item(), target.size(0))
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if False:
+            if i < len(output_writers):  # log first output of first batches
+                if epoch == 0:
+                    mean_values = torch.tensor([0.45,0.432,0.411], dtype=input.dtype).view(3,1,1)
+                    output_writers[i].add_image('GroundTruth', flow2rgb(args.div_flow * target[0], max_value=10), 0)
+
+                    output_writers[i].add_image('Inputs', (input[0, :2].cpu() + mean_values).clamp(0, 1), 0)
+                    output_writers[i].add_image('Inputs', (input[0, 2:].cpu() + mean_values).clamp(0, 1), 1)
+                    #output_writers[i].add_image('Inputs', (input[0,:3].cpu() + mean_values).clamp(0,1), 0)
+                    #output_writers[i].add_image('Inputs', (input[0,3:].cpu() + mean_values).clamp(0,1), 1)
+                output_writers[i].add_image('FlowNet Outputs', flow2rgb(args.div_flow * output[0], max_value=10), epoch)
+
+        if epoch % 5 == 0 and i % 5 ==0:
+            #try:
+            a = flow2rgb(args.div_flow * output[0], max_value=10)
+            print(np.shape(a))
+            a = np.transpose(a, (1, 2, 0))
+            print(np.shape(a))
+            print(a[15:19, 27:40])
+            print(a.dtype)
+
+            print("#######################")
+            flow_map = output[0].detach().cpu().numpy()
+            flow_map = np.transpose(flow_map, (1, 2, 0))
+            print(np.shape(flow_map))
+
+            IMG = ((a / np.max(a))*255).astype(np.uint8)
+
+
+            viewImg(IMG, to_8bit = False, filename = "flow_" + str(i) + '.jpg', show = False)
+
+            A = args.div_flow * flow_map
+
+            #viewFlow(flow_array, dimx, dimy, to_8bit=False, filename=None, show=True):
+            viewFlow(A, 64, 48, to_8bit = False, filename = 'gen_flow_' + str(i) + '.jpg', show = False)
+
+            flow_map_gt = target[0].detach().cpu().numpy()
+            flow_map_gt = np.transpose(flow_map_gt, (1, 2, 0))
+            print(np.shape(flow_map_gt))
+            viewFlow(flow_map_gt, 256, 192, to_8bit=False, filename = 'gt_flow_' + str(i) + '.jpg', show = False)
+
+            #except:
+             #   continue
+
+            #viewImg(flow2rgb(args.div_flow * output[0], max_value=10))
+
+
+        if i % args.print_freq == 0:
+            print('Test: [{0}/{1}]\t Time {2}\t EPE {3}'
+                  .format(i, len(val_loader), batch_time, flow2_EPEs))
+
+    print(' * EPE {:.3f}'.format(flow2_EPEs.avg))
+
+    return flow2_EPEs.avg
 
 
 def main():
-    # Training settings
-    # Use the command line to modify the default settings
-    parser = argparse.ArgumentParser(description='PyTorch PhotonNet')
-    parser.add_argument('--batch-size', type=int, default=64, metavar='N',
-                        help='input batch size for training (default: 64)')
-    parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
-                        help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=5, metavar='N',
-                        help='number of epochs to train (default: 5)')
-    parser.add_argument('--lr', type=float, default=1.0, metavar='LR',
-                        help='learning rate (default: 1.0)')
-    parser.add_argument('--step', type=int, default=1, metavar='N',
-                        help='number of epochs between learning rate reductions (default: 1)')
-    parser.add_argument('--gamma', type=float, default=0.7, metavar='M',
-                        help='Learning rate step gamma (default: 0.7)')
-    parser.add_argument('--no-cuda', action='store_true', default=False,
-                        help='disables CUDA training')
-    parser.add_argument('--seed', type=int, default=1, metavar='S',
-                        help='random seed (default: 1)')
-    parser.add_argument('--log-interval', type=int, default=10, metavar='N',
-                        help='how many batches to wait before logging training status')
-
-    parser.add_argument('--evaluate', action='store_true', default=False,
-                        help='evaluate your model on the official test set')
-    parser.add_argument('--load-model', type=str,
-                        help='model file path')
-
-    parser.add_argument('--save-model', action='store_true', default=True,
-                        help='For Saving the current Model')
+    global args, best_EPE
     args = parser.parse_args()
     use_cuda = not args.no_cuda and torch.cuda.is_available()
 
@@ -295,8 +326,8 @@ def main():
                         transforms.Normalize((0.1307,), (0.3081,))
                     ]))
 
-        test_loader = torch.utils.data.DataLoader(
-            test_dataset, batch_size=args.test_batch_size, shuffle=True, **kwargs)
+        #test_loader = torch.utils.data.DataLoader(
+        #    test_dataset, batch_size=args.test_batch_size, shuffle=True, **kwargs)
 
         test(model, device, test_loader, evaluate = True)
 
@@ -314,18 +345,27 @@ def main():
 
     '''
 
-    '''
+    save_path = '..//data//output'
+    train_writer = SummaryWriter(os.path.join(save_path, 'train'))
+    test_writer = SummaryWriter(os.path.join(save_path, 'test'))
+    output_writers = []
+    for i in range(3):
+        output_writers.append(SummaryWriter(os.path.join(save_path, 'test', str(i))))
+
+
+
+    time_range = 64
     # Data loading code
     input_transform = transforms.Compose([
         flow_transforms.ArrayToTensor(),
-        transforms.Normalize(mean=[0,0,0], std=[255,255,255]),
-        transforms.Normalize(mean=[0.45,0.432,0.411], std=[1,1,1])
+        transforms.Normalize(mean=[0.1906,4.622], std=[0.376,12.034]),
+        #transforms.Normalize(mean=[0.45,0.432,0.411], std=[1,1,1])
     ])
     target_transform = transforms.Compose([
         flow_transforms.ArrayToTensor(),
         transforms.Normalize(mean=[0,0],std=[args.div_flow,args.div_flow])
     ])
-    '''
+
 
 
     FM_1_testdir = "C://data//FlyingMonkeys_1//test"
@@ -362,31 +402,31 @@ def main():
 
     print(train_list [787])
     print(test_list[787])
-    train_dataset = ListDataset(FM_1_traindir , train_list)
-    test_dataset = ListDataset(FM_1_testdir, test_list)
+    train_dataset = ListDataset(FM_1_traindir , train_list, input_transform, target_transform)
+    test_dataset = ListDataset(FM_1_testdir, test_list, input_transform, target_transform)
 
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size,
-        num_workers = 1, pin_memory=True, shuffle=True)
+        num_workers = 2, pin_memory=True, shuffle=True)
     val_loader = torch.utils.data.DataLoader(
         test_dataset, batch_size=args.batch_size,
-        num_workers = 1, pin_memory=True, shuffle=False)
+        num_workers = 2, pin_memory=True, shuffle=False)
 
 
-    a,b = train_dataset.__getitem__(178)
+    #a,b = train_dataset.__getitem__(178)
 
-    print(np.shape(a))
-    viewFlow(b,256,192)
+    #print(np.shape(a))
+    #viewFlow(b,256,192)
 
-    np.shape(a)
-    print(a[: ,: ,0].dtype)
-    print(a[:, :, 1].dtype)
-    viewImg(a[:,:,1])
-    viewImg(a[:, :, 0])
+    #np.shape(a)
+    #print(a[: ,: ,0].dtype)
+    #print(a[:, :, 1].dtype)
+    #viewImg(a[:,:,1])
+    #viewImg(a[:, :, 0])
 
-    print(a[100,100,0])
-    print(a[100, 100, 1])
+    #print(a[100,100,0])
+    #print(a[100, 100, 1])
 
 
 
@@ -474,17 +514,21 @@ def main():
     
     '''
     # Load model
-    model = PhotonNetS(batchNorm=False).to(device)
+    model = PhotonNetS(batchNorm=True).to(device)
 
 
 
     # Try different optimzers here [Adam, SGD, RMSprop]
-    optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
+    #optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
+    optimizer = optim.Adam(model.parameters(), 0.00030,
+                                 betas=(.9, .999))
 
 
-    # Set your learning rate scheduler
+    # betas=(args.momentum, args.beta))
+
+    # Set learning rate scheduler
     scheduler = StepLR(optimizer, step_size=args.step, gamma=args.gamma)
-
+    #scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestones, gamma=0.5)
 
     '''
     # Training loop
@@ -494,25 +538,39 @@ def main():
     fig, ax = plt.subplots(1)
     '''
 
-    if False:
-        for epoch in range(1, args.epochs + 1):
-            #train and test each epoch
-            train_loss = train(args, model, device, train_loader, optimizer, epoch)
-            test_loss = test(model, device, val_loader)
-            scheduler.step()    # learning rate scheduler
+    if True:
+        for epoch in range(20):
 
-            train_losses.append(train_loss)
-            test_losses.append(test_loss)
-            x.append(epoch - 1)
-            ax.plot(x, test_losses, label='test_losses', markersize=2)
-            ax.plot(x, train_losses, label='train_losses', markersize=2)
 
-            plt.pause(0.05)
+            # train for one epoch
+            train_loss, train_EPE = train(train_loader, model, optimizer, epoch, train_writer)
+            train_writer.add_scalar('mean EPE', train_EPE, epoch)
 
-            # You may optionally save your model at each epoch here
+            # evaluate on validation set
+
+            with torch.no_grad():
+                EPE = validate(val_loader, model, epoch, output_writers)
+            test_writer.add_scalar('mean EPE', EPE, epoch)
+
+            scheduler.step()
+
+            if best_EPE < 0:
+                best_EPE = EPE
+
+            is_best = EPE < best_EPE
+            best_EPE = min(EPE, best_EPE)
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'arch': "photonets",
+                #'state_dict': model.module.state_dict(),
+                'best_EPE': best_EPE,
+                'div_flow': args.div_flow
+            }, is_best, save_path)
 
         if args.save_model:
-
+            ######################
+            # needs to be updated
+            ######################
             print(train_losses)
             with open("train_losses_one.txt", "wb") as fp:  # Pickling
                 pickle.dump(train_losses, fp)

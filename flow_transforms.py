@@ -34,7 +34,7 @@ class ArrayToTensor(object):
 
     def __call__(self, array):
         assert(isinstance(array, np.ndarray))
-        array = np.transpose(array, (2, 0, 1))      #why put color first?
+        array = np.transpose(array, (2, 0, 1))      #putting channels first seems to be standard for ImageNet also
         # handle numpy array
         tensor = torch.from_numpy(array)
         # put it from HWC to CHW format
