@@ -73,7 +73,12 @@ def exr2numpy(exr, maxvalue=1., normalize=True):
 
 
 def img2rgb(img,w,h):
+
+  #####what is going on???
+
   hsv = np.zeros((h, w, 3), np.uint8)
+  # hsv = np.zeros((h, w, 3), np.uint8)
+
   hsv[..., 1] = 255
 
   mag, ang = cv2.cartToPolar(img[..., 0], img[..., 1])

@@ -27,6 +27,38 @@ def EPE(input_flow, target_flow, sparse=False, mean=True):
     else:
         return EPE_map.sum()/batch_size
 
+def piEPE(input_flow, target_flow, sparse=False, mean=True):
+    #EPEs for each image in the minibatch returned as a list
+
+    if False:
+        print("############################# input flow")
+        print(input_flow.size())
+        if input_flow.size()[2] == 192:
+            print(input_flow[0,1,100:110,150:160])
+
+        print("############################# target flow")
+        print(target_flow.size())
+        if target_flow.size()[2] == 192:
+            print(target_flow[0,1,100:110,150:160])
+
+    EPE_map = torch.norm(target_flow-input_flow,2,1)
+    batch_size = EPE_map.size(0)
+    if sparse:
+        # invalid flow is defined with both flow coordinates to be exactly 0
+        mask = (target_flow[:,0] == 0) & (target_flow[:,1] == 0)
+
+        EPE_map = EPE_map[~mask]
+    if mean:
+        return EPE_map.mean()
+    else:
+        EPEs = []
+        for img in range(EPE_map.size(0)):
+            #if img == 0:
+                #print(EPE_map[img].mean().detach().cpu().numpy())
+            EPEs.append(EPE_map[img].mean().detach().cpu().numpy())
+            #print(EPE_map[img].detach().cpu().numpy())
+        return EPEs
+
 
 def sparse_max_pool(input, size):
     '''Downsample the input by considering 0 values as invalid.
@@ -70,3 +102,8 @@ def realEPE(output, target, sparse=False):
     b, _, h, w = target.size()
     upsampled_output = F.interpolate(output, (h,w), mode='bilinear', align_corners=False)
     return EPE(upsampled_output, target, sparse, mean=True)
+
+def perImgEPE(output, target, sparse=False):
+    b, _, h, w = target.size()
+    upsampled_output = F.interpolate(output, (h, w), mode='bilinear', align_corners=False)
+    return piEPE(upsampled_output, target, sparse, mean=False)

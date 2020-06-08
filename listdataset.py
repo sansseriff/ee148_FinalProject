@@ -33,6 +33,8 @@ class ListDataset(data.Dataset):
         #print("target size:", np.shape(target))
         #print("input size:", np.shape(input))
         if self.co_transform is not None:
+            #print(len(input))
+            #print(len(target))
             inputs, target = self.co_transform(input, target)
 
         if self.transform is not None:

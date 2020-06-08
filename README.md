@@ -28,6 +28,6 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 
 ## Acknowledgments
 
-* [Clement Pinard](https://github.com/ClementPinard)
-* [Tobias Weis](http://www.tobias-weis.de/groundtruth-data-for-computer-vision-with-blender/)
+* [Clement Pinard](https://github.com/ClementPinard) for the pytorch implemenation of the FlowNet publication
+* [Tobias Weis](http://www.tobias-weis.de/groundtruth-data-for-computer-vision-with-blender/) for functions and techniques for converting .exr files from blender with vector passes into numpy array flow feilds. 
 

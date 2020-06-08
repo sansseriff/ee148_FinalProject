@@ -8,6 +8,14 @@ __all__ = [
 ]
 
 
+RGB = True
+
+if RGB:
+    channels = 6
+else:
+    channels = 2
+
+
 class PhotonNetS(nn.Module):
     expansion = 1
 
@@ -15,30 +23,57 @@ class PhotonNetS(nn.Module):
         super(PhotonNetS,self).__init__()
 
         ####halved
-        self.batchNorm = batchNorm
-        self.conv1   = conv(self.batchNorm,   2,   32, kernel_size=7, stride=2)
-        self.conv2   = conv(self.batchNorm,  32,  64, kernel_size=5, stride=2)
-        self.conv3   = conv(self.batchNorm, 64,  128, kernel_size=5, stride=2)
-        self.conv3_1 = conv(self.batchNorm, 128,  128)
-        self.conv4   = conv(self.batchNorm, 128,  256, stride=2)
-        self.conv4_1 = conv(self.batchNorm, 256,  256)
-        self.conv5   = conv(self.batchNorm, 256,  256, stride=2)
-        self.conv5_1 = conv(self.batchNorm, 256,  256)
-        self.conv6   = conv(self.batchNorm, 256, 512, stride=2)
-        self.conv6_1 = conv(self.batchNorm,512, 512)
+        if RGB:
+            #print("yesRGB")
+            self.batchNorm = batchNorm
+            self.conv1 = conv(self.batchNorm, channels, 32, kernel_size=7, stride=2)
+            self.conv2 = conv(self.batchNorm, 32, 64, kernel_size=5, stride=2)
+            self.conv3 = conv(self.batchNorm, 64, 128, kernel_size=5, stride=2)
+            self.conv3_1 = conv(self.batchNorm, 128, 128)
+            self.conv4 = conv(self.batchNorm, 128, 256, stride=2)
+            self.conv4_1 = conv(self.batchNorm, 256, 256)
+            self.conv5 = conv(self.batchNorm, 256, 256, stride=2)
+            self.conv5_1 = conv(self.batchNorm, 256, 256)
+            self.conv6 = conv(self.batchNorm, 256, 512, stride=2)
+            self.conv6_1 = conv(self.batchNorm, 512, 1024)
+        else:
+            self.batchNorm = batchNorm
+            self.conv1   = conv(self.batchNorm,   channels,   32, kernel_size=7, stride=2)
+            self.conv2   = conv(self.batchNorm,  32,  64, kernel_size=5, stride=2)
+            self.conv3   = conv(self.batchNorm, 64,  128, kernel_size=5, stride=2)
+            self.conv3_1 = conv(self.batchNorm, 128,  128)
+            self.conv4   = conv(self.batchNorm, 128,  256, stride=2)
+            self.conv4_1 = conv(self.batchNorm, 256,  256)
+            self.conv5   = conv(self.batchNorm, 256,  256, stride=2)
+            self.conv5_1 = conv(self.batchNorm, 256,  256)
+            self.conv6   = conv(self.batchNorm, 256, 512, stride=2)
+            self.conv6_1 = conv(self.batchNorm,512, 1024)
 
 
         #######
-        self.deconv5 = deconv(512,256)  # input: conv6(512)
-        self.deconv4 = deconv(514,128)   # input: deconv5(256) + conv5_1(256) + flow6_up(2)
-        self.deconv3 = deconv(386,64)  # input: deconv4(128) + conv4_1(256) + flow5_up(2)
-        self.deconv2 = deconv(194,32) # input: deconv3(64) + conv3_1(128) + flow4_up(2)
+        if RGB:
+            self.deconv5 = deconv(1024, 256)  # input: conv6(512)
+            self.deconv4 = deconv(514, 128)  # input: deconv5(256) + conv5_1(256) + flow6_up(2)
+            self.deconv3 = deconv(386, 64)  # input: deconv4(128) + conv4_1(256) + flow5_up(2)
+            self.deconv2 = deconv(194, 32)  # input: deconv3(64) + conv3_1(128) + flow4_up(2)
+        else:
+            self.deconv5 = deconv(512, 256)  # input: conv6(512)
+            self.deconv4 = deconv(514, 128)  # input: deconv5(256) + conv5_1(256) + flow6_up(2)
+            self.deconv3 = deconv(386, 64)  # input: deconv4(128) + conv4_1(256) + flow5_up(2)
+            self.deconv2 = deconv(194, 32)  # input: deconv3(64) + conv3_1(128) + flow4_up(2)
 
-        self.predict_flow6 = predict_flow(512)
-        self.predict_flow5 = predict_flow(514)
-        self.predict_flow4 = predict_flow(386)
-        self.predict_flow3 = predict_flow(194)
-        self.predict_flow2 = predict_flow(98)  # input: deconv2(32) + conv2(64) + flow3_up(2)
+        if RGB:
+            self.predict_flow6 = predict_flow(1024)
+            self.predict_flow5 = predict_flow(514)
+            self.predict_flow4 = predict_flow(386)
+            self.predict_flow3 = predict_flow(194)
+            self.predict_flow2 = predict_flow(98)  # input: deconv2(32) + conv2(64) + flow3_up(2)
+        else:
+            self.predict_flow6 = predict_flow(512)
+            self.predict_flow5 = predict_flow(514)
+            self.predict_flow4 = predict_flow(386)
+            self.predict_flow3 = predict_flow(194)
+            self.predict_flow2 = predict_flow(98)  # input: deconv2(32) + conv2(64) + flow3_up(2)
 
         self.upsampled_flow6_to_5 = nn.ConvTranspose2d(2, 2, 4, 2, 1, bias=False)
         self.upsampled_flow5_to_4 = nn.ConvTranspose2d(2, 2, 4, 2, 1, bias=False)

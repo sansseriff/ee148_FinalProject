@@ -18,7 +18,7 @@ import PIL
 import pickle
 from PIL import Image
 import flow_transforms
-from multiscaleloss import multiscaleEPE, realEPE
+from multiscaleloss import multiscaleEPE, realEPE, perImgEPE
 from tensorboardX import SummaryWriter
 
 import sklearn
@@ -36,12 +36,22 @@ import os
 random.seed(2020)
 torch.manual_seed(2020)
 
+evaluate = False
+train = True
+RGB = True
+
+if RGB:
+    dataset_mean = [0.6787816572469181, 25.33983741301654, 0.5781771226152195, 25.791804764729637, 0.473918180575716, 20.65891969206362]
+    dataset_std = [0.40779226864547835, 31.37493267977034, 0.4592493703301828, 34.17082339570451, 0.42522918921017905, 30.06761831221986]
+else:
+    dataset_mean = [0.1906,4.622]
+    dataset_std = [0.376,12.034]
 
 
 # Training settings
 # Use the command line to modify the default settings
 parser = argparse.ArgumentParser(description='PyTorch PhotonNet')
-parser.add_argument('-b', '--batch-size', default=50, type=int,
+parser.add_argument('-b', '--batch-size', default=10, type=int,
                     metavar='N', help='mini-batch size')
 #parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
 #                    help='input batch size for testing (default: 1000)')
@@ -69,7 +79,7 @@ parser.add_argument('--save-model', action='store_true', default=False,
                     help='For Saving the current Model')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum for sgd, alpha parameter for adam')
-parser.add_argument('--multiscale-weights', '-w', default=[0.02, 0.04, 0.04, 0.08, 0.32], type=float, nargs=5,
+parser.add_argument('--multiscale-weights', '-w', default=[0.04, 0.08, 0.08, 0.16, 0.32], type=float, nargs=5,
                     help='training weight for each scale, from highest resolution (flow2) to lowest (flow6)',
                     metavar=('W2', 'W3', 'W4', 'W5', 'W6'))
 parser.add_argument('--milestones', default=[100, 150, 200], metavar='N', nargs='*',
@@ -142,7 +152,16 @@ def train(train_loader, model, optimizer, epoch, train_writer):
 
     end = time.time()
 
+    #rot = flow_transforms.RandomRotate(30)
+    #trans = flow_transforms.RandomTranslate(5)
+
     for i, (input, target) in enumerate(train_loader):
+
+        ######Data Augmentation#############
+        #input, target = rot(input, target)
+        #input, target = trans(input, target)
+
+
         # measure data loading time
         data_time.update(time.time() - end)
         target = target.to(device)
@@ -223,7 +242,25 @@ def validate(val_loader, model, epoch, output_writers):
     model.eval()
 
     end = time.time()
+    total_photons = []
+    EPEs = []
     for i, (input, target) in enumerate(val_loader):
+
+
+        if evaluate:
+            #print(np.shape(input))
+            #print(np.shape(input)[0])
+            #print(input.size()[0])
+            #print(np.shape(input.numpy()))
+            #print("####################")
+            photons = []
+            for q in range(input.size()[0]):
+                array = input.numpy()[q,0]
+                array = array*dataset_std[0] + dataset_mean[0]
+                sum = np.sum(array)
+                photons.append(sum)
+
+            total_photons.extend(photons)
         target = target.to(device)
         #################
         #?????????????????
@@ -233,8 +270,15 @@ def validate(val_loader, model, epoch, output_writers):
         # compute output
         output = model(input)
         flow2_EPE = args.div_flow*realEPE(output, target, sparse=args.sparse)
+        if evaluate:
+            #perImgEPE(output, target, sparse=args.sparse).tolist()
+
+            EPEs.extend(perImgEPE(output, target, sparse=args.sparse))
+
+            #print("flow to epe: ", flow2_EPE.item())
         # record EPE
         flow2_EPEs.update(flow2_EPE.item(), target.size(0))
+
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -252,13 +296,13 @@ def validate(val_loader, model, epoch, output_writers):
                     #output_writers[i].add_image('Inputs', (input[0,3:].cpu() + mean_values).clamp(0,1), 1)
                 output_writers[i].add_image('FlowNet Outputs', flow2rgb(args.div_flow * output[0], max_value=10), epoch)
 
-        if epoch % 5 == 0 and i % 5 ==0:
+        if epoch % 1 == 0 and i % 5 ==0:
             #try:
             a = flow2rgb(args.div_flow * output[0], max_value=10)
-            print(np.shape(a))
+            #print(np.shape(a))
             a = np.transpose(a, (1, 2, 0))
-            print(np.shape(a))
-            print(a[15:19, 27:40])
+            #print(np.shape(a))
+            #print(a[15:19, 27:40])
             print(a.dtype)
 
             print("#######################")
@@ -293,7 +337,18 @@ def validate(val_loader, model, epoch, output_writers):
 
     print(' * EPE {:.3f}'.format(flow2_EPEs.avg))
 
-    return flow2_EPEs.avg
+    if evaluate:
+        print("length of total_photons: ", len(total_photons))
+        print("length of EPEs: ", len(EPEs))
+        fig = plt.figure()
+        plt.plot(total_photons,EPEs,'.')
+        plt.title("End Point Error vs Collected Photons")
+        plt.xlabel("Photons in Example")
+        plt.ylabel("EPE of Example")
+
+
+    else:
+        return flow2_EPEs.avg
 
 
 def main():
@@ -334,7 +389,7 @@ def main():
     # Data loading code
     input_transform = transforms.Compose([
         flow_transforms.ArrayToTensor(),
-        transforms.Normalize(mean=[0.1906,4.622], std=[0.376,12.034]),
+        transforms.Normalize(mean=dataset_mean, std=dataset_std),
         #transforms.Normalize(mean=[0.45,0.432,0.411], std=[1,1,1])
     ])
     target_transform = transforms.Compose([
@@ -342,10 +397,19 @@ def main():
         transforms.Normalize(mean=[0,0],std=[args.div_flow,args.div_flow])
     ])
 
+    #co_transform = transforms.Compose([
+    #    flow_transforms.RandomRotate(5),
+    #    flow_transforms.RandomTranslate(10)
+    #])
 
+    #co_transform = flow_transforms.RandomRotate(10)
 
-    FM_1_testdir = "C://data//FlyingMonkeys_1//test"
-    FM_1_traindir = "C://data//FlyingMonkeys_1//train"
+    if RGB:
+        FM_1_testdir = "F://Flying_monkeys_2_RGB//test"
+        FM_1_traindir = "F://Flying_monkeys_2_RGB//train"
+    else:
+        FM_1_testdir = "C://data//FlyingMonkeys_1//test"
+        FM_1_traindir = "C://data//FlyingMonkeys_1//train"
     train_data = []
     train_gt = []
 
@@ -376,11 +440,13 @@ def main():
     train_list = [[data[0],gt[0]] for data, gt in zip(train_data,train_gt)]
     test_list = [[data[0], gt[0]] for data, gt in zip(test_data, test_gt)]
 
-    print(train_list [787])
-    print(test_list[787])
-    train_dataset = ListDataset(FM_1_traindir , train_list, input_transform, target_transform)
-    test_dataset = ListDataset(FM_1_testdir, test_list, input_transform, target_transform)
+    #print(train_list [787])
+    #print(test_list[787])
+    #train_dataset = ListDataset(FM_1_traindir , train_list, input_transform, target_transform, co_transform)
+    #test_dataset = ListDataset(FM_1_testdir, test_list, input_transform, target_transform, co_transform)
 
+    train_dataset = ListDataset(FM_1_traindir, train_list, input_transform, target_transform)
+    test_dataset = ListDataset(FM_1_testdir, test_list, input_transform, target_transform)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size,
@@ -410,7 +476,7 @@ def main():
 
     '''######################################################'''
     # Evaluate on the test set using saved model
-    evaluate = True
+
     if evaluate:
         assert os.path.exists(os.path.join(save_path, "datset1_15epochs.pt"))
 
@@ -426,19 +492,20 @@ def main():
 
         with torch.no_grad():
             epoch = 1
-            EPE = validate(val_loader, model, epoch, output_writers)
+            EPE, total_photons = validate(val_loader, model, epoch, output_writers)
             print("EPE is:", EPE)
         return
 
 
 
-    train = False
+
     if train:
 
         # Try different optimzers here [Adam, SGD, RMSprop]
         #optimizer = optim.Adadelta(model.parameters(), lr=args.lr)
-        optimizer = optim.Adam(model.parameters(), 0.00030,
-                                     betas=(.9, .999))
+
+        #optimizer = optim.SGD(model.parameters(), lr=0.0001, momentum=0.4)
+        optimizer = optim.Adam(model.parameters(), 0.00100, betas=(.9, .999))
 
         # betas=(args.momentum, args.beta))
 
@@ -453,17 +520,22 @@ def main():
         x = []
         fig, ax = plt.subplots(1)
         '''
-        for epoch in range(15):
-
+        train_EPE_list = []
+        test_EPE_list = []
+        epoch_list = []
+        for epoch in range(21):
+            epoch_list.append(epoch)
 
             # train for one epoch
             train_loss, train_EPE = train(train_loader, model, optimizer, epoch, train_writer)
             train_writer.add_scalar('mean EPE', train_EPE, epoch)
+            train_EPE_list.append(train_EPE)
 
             # evaluate on validation set
 
             with torch.no_grad():
                 EPE = validate(val_loader, model, epoch, output_writers)
+                test_EPE_list.append(EPE)
             test_writer.add_scalar('mean EPE', EPE, epoch)
 
             scheduler.step()
@@ -491,7 +563,21 @@ def main():
             #print(test_losses)
             #with open("test_losses_one.txt", "wb") as fp:  # Pickling
             #    pickle.dump(test_losses, fp)
-        torch.save(model.state_dict(), os.path.join(save_path, "datset1_15epochs.pt"))
+            print(train_EPE_list)
+            print(test_EPE_list)
+            train_EPE_ls = np.asarray(train_EPE_list)
+            test_EPE_ls = np.asarray(test_EPE_list)
+            np.save(os.path.join(save_path, "train_EPE_ls"), train_EPE_ls)
+            np.save(os.path.join(save_path, "test_EPE_ls"), test_EPE_ls)
+            fig = plt.figure()
+            plt.plot(epoch_list, train_EPE_list, 'r', label="train")
+            plt.plot(epoch_list, test_EPE_list, 'b', label="test")
+            plt.title("End Point Error with Epoch")
+            plt.legend()
+            plt.show()
+
+        torch.save(model.state_dict(), os.path.join(save_path, "datset1_10epochs_small_minibatch"))
+
 
 
 if __name__ == '__main__':

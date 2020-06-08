@@ -13,7 +13,7 @@ def viewFlow(flow_array, dimx, dimy):
     fig, ax = plt.subplots(1)
     ax.imshow(im)
 
-data_path = "C://data//FlyingMonkeys_1//train"
+data_path = "F://Flying_monkeys_2_RGB//train"
 
 file_names = sorted(os.listdir(data_path))
 
